@@ -20,8 +20,10 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import threading
 import time
+import wave
 from typing import Optional
 
 import numpy as np
@@ -74,11 +76,18 @@ class AudioCaptureProbe:
         log_interval_seconds: float = 1.0,
         silence_threshold_dbfs: float = -50.0,
         no_signal_warning_seconds: float = 15.0,
+        record_path: Optional[str] = None,
     ) -> None:
         self._bot_id = bot_id
         self._log_interval_seconds = log_interval_seconds
         self._silence_threshold_dbfs = silence_threshold_dbfs
         self._no_signal_warning_seconds = no_signal_warning_seconds
+        # When set, every raw byte read from parec is also written here as a
+        # standard PCM WAV file (mono/48kHz/16-bit) -- the *entire* captured
+        # stream for the session, not just the leveled windows used for
+        # logging, so you can play back exactly what the bot heard.
+        self._record_path = record_path
+        self._wave_writer: Optional[wave.Wave_write] = None
 
         self._loop = asyncio.new_event_loop()
         self._thread = threading.Thread(target=self._run_event_loop, name=f"audio-probe-{bot_id}", daemon=True)
@@ -115,6 +124,13 @@ class AudioCaptureProbe:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.DEVNULL,
         )
+        if self._record_path:
+            os.makedirs(os.path.dirname(self._record_path) or ".", exist_ok=True)
+            self._wave_writer = wave.open(self._record_path, "wb")
+            self._wave_writer.setnchannels(_NUM_CHANNELS)
+            self._wave_writer.setsampwidth(_BYTES_PER_SAMPLE)
+            self._wave_writer.setframerate(_SAMPLE_RATE)
+            logger.info("bot=%s audio_probe recording full session audio to %s", self._bot_id, self._record_path)
         self._task = asyncio.ensure_future(self._run())
 
     async def _run(self) -> None:
@@ -131,7 +147,14 @@ class AudioCaptureProbe:
                 chunk = await self._proc.stdout.read(4096)
                 if not chunk:
                     logger.info("bot=%s audio_probe: capture stream ended", self._bot_id)
+                    self._close_wave_writer()
                     return
+                if self._wave_writer is not None:
+                    try:
+                        self._wave_writer.writeframes(chunk)
+                    except Exception:
+                        logger.exception("bot=%s audio_probe: failed writing to recording file; disabling recording for the rest of this session", self._bot_id)
+                        self._wave_writer = None
                 buffer.extend(chunk)
 
                 if len(buffer) < window_bytes:
@@ -179,9 +202,22 @@ class AudioCaptureProbe:
                     )
                     last_warning_at = now
         except asyncio.CancelledError:
+            self._close_wave_writer()
             raise
         except Exception:
             logger.exception("bot=%s audio_probe pipeline failed", self._bot_id)
+            self._close_wave_writer()
+
+    def _close_wave_writer(self) -> None:
+        if self._wave_writer is None:
+            return
+        try:
+            self._wave_writer.close()
+            logger.info("bot=%s audio_probe: recording saved to %s", self._bot_id, self._record_path)
+        except Exception:
+            logger.exception("bot=%s audio_probe: error closing recording file", self._bot_id)
+        finally:
+            self._wave_writer = None
 
     def stop(self) -> None:
         if self._stopped:

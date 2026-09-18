@@ -56,6 +56,8 @@ class Settings:
     agent_name: str
     audio_probe_log_interval_seconds: float
     audio_probe_silence_threshold_dbfs: float
+    audio_recording_enabled: bool
+    audio_recording_dir: str
 
 
 def _load_settings() -> Settings:
@@ -84,6 +86,12 @@ def _load_settings() -> Settings:
         agent_name=_env_str("AGENT_NAME", "meet-voice-agent"),
         audio_probe_log_interval_seconds=float(_env_str("AUDIO_PROBE_LOG_INTERVAL_SECONDS", "1.0")),
         audio_probe_silence_threshold_dbfs=float(_env_str("AUDIO_PROBE_SILENCE_THRESHOLD_DBFS", "-50.0")),
+        # Only used while LIVEKIT_ENABLED=false (audio_probe.AudioCaptureProbe
+        # is what's running the capture in that mode -- see its record_path
+        # param). Writes the whole session's captured Meet audio to a WAV
+        # file for manual playback verification.
+        audio_recording_enabled=_env_bool("AUDIO_RECORDING_ENABLED", False),
+        audio_recording_dir=_env_str("AUDIO_RECORDING_DIR", "./recordings"),
     )
 
 

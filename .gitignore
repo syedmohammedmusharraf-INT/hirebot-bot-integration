@@ -6,3 +6,8 @@ venv/
 *.log
 /tmp/
 .pytest_cache/
+
+# Recorded meeting audio (AUDIO_RECORDING_ENABLED=true) -- may contain real
+# participant voices, never commit the actual files.
+recordings/*.wav
+!recordings/.gitkeep

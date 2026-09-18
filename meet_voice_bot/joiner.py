@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import threading
 import time
 from dataclasses import replace
@@ -164,10 +165,15 @@ class MeetBotSession:
                 # verify -- with logging -- that Meet's audio is reaching
                 # this container's PulseAudio capture device. See
                 # audio_probe.py.
+                record_path = None
+                if self._settings.audio_recording_enabled:
+                    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+                    record_path = os.path.join(self._settings.audio_recording_dir, f"meet-audio-{self._bot_id}-{timestamp}.wav")
                 self._bridge = AudioCaptureProbe(
                     bot_id=self._bot_id,
                     log_interval_seconds=self._settings.audio_probe_log_interval_seconds,
                     silence_threshold_dbfs=self._settings.audio_probe_silence_threshold_dbfs,
+                    record_path=record_path,
                 )
             self._bridge.start()
 

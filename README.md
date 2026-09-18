@@ -97,6 +97,7 @@ hirebot_bot_integration/
 │   └── knobs.py                     # temperature vs reasoning_effort/verbosity gating
 ├── assistants/                      # local assistant records (replaces `POST /assistant/create`)
 │   └── meet-voice-bot-v1.yaml
+├── recordings/                      # AUDIO_RECORDING_ENABLED=true WAV output (gitignored, dir tracked via .gitkeep)
 ├── docker/
 │   ├── Dockerfile.meet-voice        # control image (Chrome 134 + Xvfb + PulseAudio + app)
 │   ├── Dockerfile.agent             # agent image (python:3.11-slim, no browser deps)
@@ -200,6 +201,21 @@ INFO  bot=a1b2c3d4e5f6 audio_probe: back to silence (level=-inf dBFS)
 - **A "DETECTED" line followed by periodic `state=VOICE`/`state=silence` lines tracking who's talking**: the capture path works end to end -- this is exactly the signal `livekit_bridge.MeetAudioBridge` would be publishing into the room if `LIVEKIT_ENABLED=true`.
 - Tune sensitivity with `AUDIO_PROBE_SILENCE_THRESHOLD_DBFS` (raise it, e.g. to `-40`, if background noise is triggering false "VOICE" detections; lower it, e.g. to `-60`, if quiet speech isn't crossing the threshold).
 
+### Recording the captured audio to a file
+
+To actually listen back to what the bot captured (not just watch dBFS numbers), set `AUDIO_RECORDING_ENABLED=true` in `.env` and restart the container. `audio_probe.AudioCaptureProbe` then writes the *entire* session's captured audio -- every byte read from `auto_null.monitor`, not just the leveled windows used for logging -- to a standard mono/16-bit/48kHz WAV file as the meeting happens.
+
+```bash
+docker compose -f docker-compose.minimal.yaml up -d --force-recreate meet-voice
+# start a bot, talk in the meeting, then check:
+ls recordings/
+# meet-audio-<bot_id>-<UTC timestamp>.wav
+```
+
+`docker-compose.minimal.yaml` mounts `./recordings` (in this repo) to `/app/recordings` in the container, so the file lands directly on your host -- no `docker cp` needed. The file finalizes (WAV header patched with the real length) when the bot leaves or the session ends; if you kill the container mid-meeting the file may be left with a zero-length header, in which case re-run with a clean leave (`POST /meet-bots/{bot_id}/leave`) first.
+
+Recordings can contain other real participants' voices -- `recordings/*.wav` is gitignored, and this is off by default for exactly that reason. Turn it off again (`AUDIO_RECORDING_ENABLED=false`) once you're done verifying.
+
 ## Enabling the full LiveKit voice pipeline
 
 Nothing about the LiveKit solution was removed for the minimal setup -- `meet_voice_bot/control.py`, `livekit_bridge.py`, and the entire `meet-agent/` worker are untouched, just not invoked while `LIVEKIT_ENABLED=false`. To turn it back on:
@@ -232,6 +248,8 @@ All variables are read from the environment (`.env` under Compose). See `.env.ex
 | `LIVEKIT_ENABLED` | `false` | The minimal-setup switch. `false`: skip room/token/dispatch/bridge entirely and run `audio_probe.AudioCaptureProbe` instead. `true`: full LiveKit flow (see [Enabling the full LiveKit voice pipeline](#enabling-the-full-livekit-voice-pipeline)). |
 | `AUDIO_PROBE_LOG_INTERVAL_SECONDS` | `1.0` | Only used while `LIVEKIT_ENABLED=false`: how often `audio_probe` logs the current capture level. |
 | `AUDIO_PROBE_SILENCE_THRESHOLD_DBFS` | `-50.0` | Only used while `LIVEKIT_ENABLED=false`: dBFS level above which a window counts as "voice" rather than silence. |
+| `AUDIO_RECORDING_ENABLED` | `false` | Only used while `LIVEKIT_ENABLED=false`: write the whole session's captured audio to a WAV file -- see [Recording the captured audio to a file](#recording-the-captured-audio-to-a-file). |
+| `AUDIO_RECORDING_DIR` | `/app/recordings` (`./recordings` outside Docker) | Where those WAV files go; `docker-compose.minimal.yaml` mounts this to `./recordings` on the host. |
 
 ### Self-hosted LiveKit — both images, only required when `LIVEKIT_ENABLED=true`
 

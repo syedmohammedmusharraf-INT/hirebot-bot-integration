@@ -117,10 +117,15 @@ COPY --chown=app:app meet_voice_bot/ ./meet_voice_bot/
 COPY --chown=app:app model_support/ ./model_support/
 COPY --chown=app:app assistants/ ./assistants/
 
+# Mount ./recordings from the host here (see docker-compose.minimal.yaml) to
+# get AUDIO_RECORDING_ENABLED=true's WAV files onto the host filesystem.
+RUN mkdir -p /app/recordings && chown app:app /app/recordings
+
 ENV ASSISTANTS_DIR=/app/assistants \
     ASSISTANT_REF=meet-voice-bot-v1 \
     CHROME_BINARY_PATH=/usr/bin/google-chrome \
-    CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
+    CHROMEDRIVER_PATH=/usr/local/bin/chromedriver \
+    AUDIO_RECORDING_DIR=/app/recordings
 
 USER app
 

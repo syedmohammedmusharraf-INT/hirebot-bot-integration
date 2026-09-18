@@ -19,4 +19,8 @@ services:
       - "8000:8000"
     volumes:
       - ./assistants:/app/assistants:ro
+      # AUDIO_RECORDING_ENABLED=true writes WAV files under
+      # AUDIO_RECORDING_DIR (/app/recordings) -- mounted read-write so they
+      # land in ./recordings on the host for playback verification.
+      - ./recordings:/app/recordings
     shm_size: "2gb"
