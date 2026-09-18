@@ -1,19 +1,33 @@
 """Google Meet guest-join UI flow.
 
-Trimmed, single-attempt (no SSO/login/mocap/humanized-mouse retry machinery)
-port of attendee/bots/google_meet_bot_adapter/google_meet_ui_methods.py.
+Trimmed, single-attempt (no SSO/login retry machinery) port of
+attendee/bots/google_meet_bot_adapter/google_meet_ui_methods.py.
 Kept: ``turn_off_media_inputs`` (donor ~197-250), ``join_now_button_selector``
 (donor ~252-253), the blocked/denied/meeting-not-found/waiting-room-timeout
 detectors (donor ~124-195), ``wait_for_host_if_needed`` (donor ~577-587),
-``fill_out_name_input`` (donor ~475-516, login/mocap branches removed),
-``attempt_to_join_meeting`` (donor ~1143-1203) and ``click_leave_button``
-(donor ~1276-1296).
+``fill_out_name_input`` (donor ~475-516, login branch removed),
+``attempt_to_join_meeting`` (donor ~1143-1203), ``click_leave_button``
+(donor ~1276-1296), and -- unlike the original trim -- the donor's
+"humanized" mocap-driven mouse movement for the name-input and join-button
+clicks (``humanized_navigate_to_and_click_element``,
+``position_mouse_for_humanized_interaction``, donor ~354-473, ~1131-1141).
+This is wired in unconditionally (there is no "robotic" mode here -- this
+system never does SSO/login, which is the only case the donor uses robotic
+mode for) because Meet's own prejoin screen states "System info will be
+sent to confirm you're not a bot" before granting a device, and a click
+with zero preceding mouse movement is a well-known automation signal; a
+real meeting rejected every join attempt with a 403 on
+``MeetingDeviceService/CreateMeetingDevice`` until this was added back. See
+``mocap_manager.py`` for the (data-free, procedurally generated) movement
+model. Falls back to a plain Selenium click if X11 input is ever
+unavailable -- this must never be a hard failure.
 
 Dropped: closed captions (join-admission no longer waits on the captions
 button -- see ``wait_until_admitted`` below for the replacement signal),
-layout/reactions/incoming-video UI tweaks, Okta/Google-account login,
-"humanized" mocap-driven mouse movement, and video-recording DOM patches --
-none of those apply to a guest-only voice bot.
+layout/reactions/incoming-video UI tweaks, Okta/Google-account login, the
+donor's clipboard-paste (xclip) text entry for the name field (kept plain
+``send_keys`` -- the click is the bot-gated action, not the typing), and
+video-recording DOM patches -- none of those apply to a guest-only voice bot.
 """
 
 from __future__ import annotations
@@ -35,9 +49,12 @@ from meet_voice_bot.web_bot_adapter.exceptions import (
     UiGoogleBlockingUsException,
     UiGoogleWrongAudioConfigurationException,
     UiMeetingNotFoundException,
+    UiMocapSequenceNotAvailableException,
     UiRequestToJoinDeniedException,
 )
 from meet_voice_bot.web_bot_adapter.ui_methods import ResilientUIMethods
+
+from .mocap_manager import MocapManager
 
 logger = logging.getLogger(__name__)
 
@@ -105,6 +122,7 @@ class GoogleMeetUIMethods(ResilientUIMethods):
         cannot_join_element = self.find_element_by_selector(By.XPATH, '//*[contains(text(), "You can\'t join this video call") or contains(text(), "There is a problem connecting to this video call")]')
         if cannot_join_element:
             logger.warning("Google is blocking the join attempt (retryable): %s", cannot_join_element.text)
+            self._dump_join_debug_info(step)
             raise UiGoogleBlockingUsException("You can't join this video call", step)
 
     def look_for_denied_your_request_element(self, step: str) -> None:
@@ -118,6 +136,7 @@ class GoogleMeetUIMethods(ResilientUIMethods):
             return
 
         text = element.text
+        self._dump_join_debug_info(step)
         if any(t in text for t in actively_denied_texts):
             raise UiRequestToJoinDeniedException("Someone in the call denied your request to join", step)
         elif any(t in text for t in no_one_responded_texts):
@@ -276,11 +295,119 @@ class GoogleMeetUIMethods(ResilientUIMethods):
             logger.warning("capture_screenshot failed: %s", e)
             return False
 
+    # -- humanized mouse movement (ported from attendee, donor ~354-473) ---
+
+    def ensure_x11_input(self):
+        if not hasattr(self, "_x11_input"):
+            from meet_voice_bot.web_bot_adapter.x11_input import X11Input
+
+            self._x11_input = X11Input()
+        return self._x11_input
+
+    def ensure_mocap_manager(self) -> MocapManager:
+        if not hasattr(self, "_mocap_manager"):
+            self._mocap_manager = MocapManager(video_frame_size=(self.window_width, self.window_height))
+        return self._mocap_manager
+
+    def position_mouse_for_humanized_interaction(self) -> None:
+        """Give the cursor a plausible starting position before the very
+        first movement, instead of starting from (0, 0) -- itself a signal
+        no real user's mouse would be sitting at when a page loads. Best
+        effort: any failure here just leaves the mouse wherever it already
+        was, never blocks the join."""
+        try:
+            x11 = self.ensure_x11_input()
+            mocap = self.ensure_mocap_manager()
+            position = mocap.get_initial_mouse_position()
+            if position is None:
+                return
+            x11.move_abs(*position)
+            logger.info("Positioned mouse at %s for humanized interaction", position)
+        except Exception:
+            logger.warning("Could not position mouse for humanized interaction; continuing without it", exc_info=True)
+
+    def humanized_navigate_to_and_click_element(self, element, step: str) -> None:
+        """Move the real X11 pointer along a generated human-like path to
+        ``element`` and click it there, instead of a synthetic Selenium/CDP
+        click with no preceding movement. Falls back to
+        ``click_element_with_fallback_to_forceful_click`` if X11 input is
+        unavailable or the generated sequence never lands on the element --
+        this must never be a hard blocker for the join flow."""
+        try:
+            x11 = self.ensure_x11_input()
+            mocap = self.ensure_mocap_manager()
+
+            metrics = self.driver.execute_script(
+                """
+                const el = arguments[0];
+                const r = el.getBoundingClientRect();
+                return {
+                    left: r.left, top: r.top, width: r.width, height: r.height,
+                    screenX: window.screenX, screenY: window.screenY,
+                    dpr: window.devicePixelRatio || 1
+                };
+                """,
+                element,
+            )
+            if not metrics or metrics["width"] <= 0 or metrics["height"] <= 0:
+                raise RuntimeError(f"Invalid element metrics: {metrics}")
+
+            dpr = float(metrics["dpr"])
+            screen_x = float(metrics["screenX"])
+            screen_y = float(metrics["screenY"])
+            rect_left = int(round((screen_x + metrics["left"]) * dpr))
+            rect_top = int(round((screen_y + metrics["top"]) * dpr))
+            rect_right = int(round((screen_x + metrics["left"] + metrics["width"]) * dpr))
+            rect_bottom = int(round((screen_y + metrics["top"] + metrics["height"]) * dpr))
+
+            ptr = x11.root.query_pointer()._data
+            current_x, current_y = int(ptr["root_x"]), int(ptr["root_y"])
+
+            seq = None
+            for attempt in range(10):
+                seq = mocap.find_random_sequence_landing_in_rect(current_x, current_y, rect_left, rect_top, rect_right, rect_bottom)
+                if seq is None:
+                    continue
+                endpoint_x = (current_x + seq.total_dx) / dpr - screen_x
+                endpoint_y = (current_y + seq.total_dy) / dpr - screen_y
+                landed = self.driver.execute_script(
+                    "var el = document.elementFromPoint(arguments[0], arguments[1]); var expected = arguments[2]; return !!el && (el === expected || expected.contains(el));",
+                    endpoint_x,
+                    endpoint_y,
+                    element,
+                )
+                if landed:
+                    break
+                logger.info("humanized interaction: generated endpoint (%.1f, %.1f) missed target on attempt %d/10, regenerating", endpoint_x, endpoint_y, attempt + 1)
+            else:
+                raise UiMocapSequenceNotAvailableException(f"No generated mouse sequence landed on the target element for step {step}", step)
+
+            for move in seq.movements:
+                dt = move.get("dt", 0)
+                if dt > 0:
+                    time.sleep(dt)
+                dx, dy = move.get("dx", 0), move.get("dy", 0)
+                if dx or dy:
+                    x11.move_rel(dx, dy)
+
+            if seq.click_down_dt > 0:
+                time.sleep(seq.click_down_dt)
+            x11.button_press("left")
+            if seq.click_up_dt > 0:
+                time.sleep(seq.click_up_dt)
+            x11.button_release("left")
+        except UiMocapSequenceNotAvailableException:
+            raise
+        except Exception:
+            logger.warning("Humanized click failed for step %s; falling back to synthetic click", step, exc_info=True)
+            self.click_element_with_fallback_to_forceful_click(element, step)
+
     def fill_out_name_input(self) -> None:
         num_attempts = 30
         for attempt_index in range(num_attempts):
             try:
                 name_input = self.retrieve_name_input_element()
+                self.humanized_navigate_to_and_click_element(name_input, "name_input")
                 name_input.send_keys(self.bot_name)
                 return
             except TimeoutException as e:
@@ -347,10 +474,21 @@ class GoogleMeetUIMethods(ResilientUIMethods):
             time.sleep(poll_interval_seconds)
 
     def verify_expected_audio_configuration(self) -> None:
-        if os.getenv("VERIFY_EXPECTED_AUDIO_CONFIGURATION_FOR_GOOGLE_MEET_BOT", "true") == "false":
+        # Disabled by default: this runs on the *prejoin lobby* (before
+        # clicking "Ask to join"), where current Meet legitimately has zero
+        # <audio> elements -- there's no active call yet, so nothing else's
+        # audio could be playing. Confirmed via scripts/diag_join.py-style
+        # debug dumps against a real, working, normal prejoin screen (name
+        # filled in, mic/cam off, "Ask to join" visible) that still had no
+        # <audio> tag -- i.e. this check false-positives on every attempt on
+        # the current Meet UI and just burns a retry each time. Set
+        # VERIFY_EXPECTED_AUDIO_CONFIGURATION_FOR_GOOGLE_MEET_BOT=true to
+        # re-enable if a future Meet UI change makes it meaningful again.
+        if os.getenv("VERIFY_EXPECTED_AUDIO_CONFIGURATION_FOR_GOOGLE_MEET_BOT", "false") != "true":
             return
         audio_elements = self.driver.find_elements(By.CSS_SELECTOR, "audio")
         if len(audio_elements) == 0:
+            self._dump_join_debug_info("verify_audio_elements_are_present")
             raise UiGoogleWrongAudioConfigurationException("audio elements are not present", "verify_audio_elements_are_present")
 
     def attempt_to_join_meeting(self) -> None:
@@ -360,16 +498,21 @@ class GoogleMeetUIMethods(ResilientUIMethods):
         at the ``MeetBotSession``/joiner layer, not here."""
         from urllib.parse import urlparse
 
+        # Give the mouse a real starting position before anything else --
+        # see position_mouse_for_humanized_interaction's docstring.
+        self.position_mouse_for_humanized_interaction()
+
         # Browser.grantPermissions takes an *origin* (scheme + host), not a
         # full URL -- passing the meeting link with its path silently fails
         # on newer Chrome, leaving the mic/camera permission prompt up.
         # Grant before navigating so the permission applies on page load.
+        # geolocation included to match the donor's grant list exactly.
         origin = f"{urlparse(self.meeting_url).scheme}://{urlparse(self.meeting_url).netloc}"
         self.driver.execute_cdp_cmd(
             "Browser.grantPermissions",
             {
                 "origin": origin,
-                "permissions": ["audioCapture", "videoCapture", "displayCapture"],
+                "permissions": ["geolocation", "audioCapture", "videoCapture", "displayCapture"],
             },
         )
 
@@ -391,7 +534,7 @@ class GoogleMeetUIMethods(ResilientUIMethods):
             self._dump_join_debug_info("join_button")
             raise
         logger.info("Clicking the join button...")
-        self.click_element_with_fallback_to_forceful_click(join_button, "join_button")
+        self.humanized_navigate_to_and_click_element(join_button, "join_button")
 
         self.wait_for_host_if_needed()
         self.wait_until_admitted()

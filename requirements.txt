@@ -45,6 +45,5 @@ pyyaml>=6.0
 # --- dev / test tooling ---
 pytest>=8.0
 
-# Optional: only needed if meet_voice_bot/web_bot_adapter/x11_input.py is
-# wired in for "humanized" mouse movement (unused by the default join path).
-# python-xlib>=0.33
+# --- control plane, humanized mouse movement (required, see requirements-control.txt) ---
+python-xlib>=0.33

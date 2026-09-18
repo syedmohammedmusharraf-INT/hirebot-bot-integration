@@ -72,3 +72,8 @@ class UiGoogleWrongAudioConfigurationException(UiRetryableExpectedException):
     """Google Meet's A/B-tested alternate audio pipeline was served for this
     session (no ``<audio>`` elements present); retrying usually lands on the
     standard configuration this adapter expects."""
+
+
+class UiMocapSequenceNotAvailableException(UiRetryableExpectedException):
+    """The generated humanized mouse-movement sequence didn't land on the
+    target element after several attempts; a fresh attempt usually succeeds."""

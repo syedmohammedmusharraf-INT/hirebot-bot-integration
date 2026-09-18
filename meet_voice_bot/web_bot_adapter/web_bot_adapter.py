@@ -36,6 +36,24 @@ logger = logging.getLogger(__name__)
 _PAYLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "payload")
 _SHARED_PAYLOAD_PATH = os.path.join(_PAYLOAD_DIR, "shared_chromedriver_payload.js")
 
+# Meet's own anti-abuse heuristics ("You can't join this video call") are
+# known to weigh common automation fingerprints, not just IP-based rate
+# limiting. This is pure property overrides -- no network I/O, safe to run
+# on every document (including the pre-navigation blank page) -- unlike the
+# websocket timing bug this is not a candidate for the same class of issue.
+# --disable-blink-features=AutomationControlled (see init_driver) already
+# stops navigator.webdriver from being set on some Chrome versions; this
+# covers the versions where it doesn't and papers over a couple of other
+# well-known headless/automation tells.
+_STEALTH_SCRIPT = """
+    try {
+        Object.defineProperty(navigator, 'webdriver', { get: () => undefined });
+        if (!window.chrome) { window.chrome = { runtime: {} }; }
+        Object.defineProperty(navigator, 'plugins', { get: () => [1, 2, 3, 4, 5] });
+        Object.defineProperty(navigator, 'languages', { get: () => ['en-US', 'en'] });
+    } catch (e) {}
+"""
+
 # Status strings passed to on_status_change(status, extra). Subclasses may
 # emit additional platform-specific values (see GoogleMeetBotAdapter).
 STATUS_IN_MEETING = "in_meeting"
@@ -265,6 +283,7 @@ class WebBotAdapter:
         subclass_payload_code = "\n".join(open(path, "r", encoding="utf-8").read() for path in self.get_chromedriver_payload_file_list())
 
         return f"""
+            {_STEALTH_SCRIPT}
             {self.get_initial_data_code()}
             {libraries_code}
             {shared_payload_code}

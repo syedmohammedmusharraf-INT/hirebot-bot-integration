@@ -17,7 +17,9 @@ PyVirtualDisplay==3.0
 websockets>=13.0
 numpy>=1.26.0
 
-# Optional: only needed if meet_voice_bot/web_bot_adapter/x11_input.py is
-# wired in for "humanized" mouse movement (not used by the default join
-# path). Uncomment if you enable it.
-# python-xlib>=0.33
+# Real X11 mouse movement for the humanized "Ask to join" / name-input
+# click (google_meet_ui_methods.py's humanized_navigate_to_and_click_element,
+# x11_input.py) -- required, not optional: Meet's invisible bot-check
+# rejects joins from a browser whose clicks show no preceding pointer
+# movement at all.
+python-xlib>=0.33
