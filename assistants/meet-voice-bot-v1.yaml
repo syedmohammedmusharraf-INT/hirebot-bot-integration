@@ -1,0 +1,36 @@
+# Local assistant record (see model_support/assistant_config.py for schema
+# and validation). This is the standalone-system equivalent of the reference
+# implementation's `POST /assistant/create` body (plan section 4.3) -- there
+# is no such endpoint here; the control plane just reads this file.
+#
+# Referenced by ASSISTANT_REF=meet-voice-bot-v1 (the filename minus .yaml).
+#
+# assistant_mode: cascade (recommended for Meet, see plan section 4.2):
+#   plugin STT -> openai.responses LLM -> plugin TTS, each stage separately
+#   metered and swappable. "pipeline" and "realtime" are also valid modes;
+#   see model_support/allowlists.py for what each one allows.
+
+assistant_name: "Meet Voice Bot"
+assistant_mode: cascade
+
+assistant_stt_model: deepgram
+assistant_stt_config:
+  model: nova-3
+  language: multi # Deepgram accepts a BCP-47 code or the literal string "multi".
+  # NOTE: "multi" language auto-detection bills higher than a pinned language.
+  # Pin a specific language (e.g. "en") once you know your meetings' language.
+
+assistant_llm_config:
+  provider: openai
+  model: gpt-4.1-mini
+  # knobs left unset on purpose: model_support.knobs picks temperature vs
+  # reasoning_effort/verbosity automatically based on the model family.
+
+assistant_tts_model: cartesia
+assistant_tts_config:
+  voice_id: "CHANGE_ME-cartesia-voice-id" # required -- there is no default voice.
+  language: en
+
+assistant_interaction_config:
+  speaks_first: false # listen first when joining a Meet call.
+  input_guard_window_sec: 3.0 # mute captured input for N seconds at the start of each reply; 0 disables.
