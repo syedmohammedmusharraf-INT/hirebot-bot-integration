@@ -234,7 +234,15 @@ class MeetBotSession:
 
     def _on_adapter_status_change(self, status: str, extra: dict) -> None:
         logger.info("bot=%s adapter status=%s extra=%s", self._bot_id, status, extra)
-        if status in ("not_in_meeting", "removed"):
+        # "removed" (kicked/removed_from_meeting) and "meeting_ended" (host
+        # ended it / everyone left) are the only genuine leave signals the
+        # adapter emits for an already-admitted bot -- see
+        # google_meet_bot_adapter.py::handle_websocket_message's docstring
+        # for why "not_in_meeting" is deliberately NOT one of them (it's the
+        # bot's normal status while still waiting to be admitted, not a
+        # leave signal; treating it as one made the bot leave the instant
+        # it was admitted).
+        if status in ("removed", "meeting_ended"):
             self._natural_end.set()
 
     def _monitor_until_leave(self) -> None:

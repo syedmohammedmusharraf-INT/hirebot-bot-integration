@@ -15,7 +15,7 @@ import logging
 import os
 from typing import Callable
 
-from meet_voice_bot.web_bot_adapter.web_bot_adapter import STATUS_IN_MEETING, STATUS_MEETING_ENDED, STATUS_NOT_IN_MEETING, STATUS_REMOVED, WebBotAdapter
+from meet_voice_bot.web_bot_adapter.web_bot_adapter import STATUS_IN_MEETING, STATUS_MEETING_ENDED, STATUS_REMOVED, WebBotAdapter
 
 from .google_meet_ui_methods import GoogleMeetUIMethods
 
@@ -90,7 +90,19 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
         """Map the trimmed payload's ``UsersUpdate``/``MeetingStatusChange``
         events onto ``on_status_change``. ``active = humanized_status ==
         "in_meeting"`` is this system's join-success signal (plan section
-        2, donor web_bot_adapter.py line ~456)."""
+        2, donor web_bot_adapter.py line ~456).
+
+        For the bot's own roster entry (``isCurrentUser``), only
+        ``removed_from_meeting`` (status 7) is treated as a leave signal --
+        matching the donor's ``web_bot_adapter.py`` ``UsersUpdate`` handler
+        exactly (it never reacts to ``not_in_meeting``/status 6 for the
+        current user at all). Status 6 is the bot's normal, expected status
+        while it's still sitting in the prejoin lobby / waiting room, not
+        yet admitted -- treating it as "the meeting is over" (as an earlier
+        revision here did) made the bot leave the instant it was admitted,
+        because the flag it set was still pending from the pre-admission
+        wait. Do not resurrect a STATUS_NOT_IN_MEETING branch here without
+        re-reading this comment."""
         message_type = message.get("type")
 
         if message_type == "UsersUpdate":
@@ -102,8 +114,7 @@ class GoogleMeetBotAdapter(WebBotAdapter, GoogleMeetUIMethods):
                         self._emit_status(STATUS_IN_MEETING, {"device_id": user.get("deviceId")})
                     elif user.get("humanized_status") == "removed_from_meeting":
                         self._emit_status(STATUS_REMOVED, {"device_id": user.get("deviceId")})
-                    else:
-                        self._emit_status(STATUS_NOT_IN_MEETING, {"device_id": user.get("deviceId")})
+                    # else: not_in_meeting (status 6) -- no-op, see docstring.
             return
 
         if message_type == "MeetingStatusChange":

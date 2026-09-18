@@ -34,7 +34,11 @@ from meet_voice_bot.assistant_store import AssistantNotFoundError, InvalidAssist
 from meet_voice_bot.config import get_settings
 from meet_voice_bot.joiner import MeetBotSession
 from meet_voice_bot.meet_url import InvalidMeetingUrlError
-from meet_voice_bot.models import BotSession
+from meet_voice_bot.models import BotSession, BotStatus
+
+# Non-terminal states: a session in one of these still has (or is about to
+# have) a live Chrome/Xvfb process running.
+_ACTIVE_BOT_STATUSES = {BotStatus.PENDING, BotStatus.JOINING, BotStatus.IN_MEETING, BotStatus.LEAVING}
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +81,22 @@ async def healthz() -> dict:
 async def create_meet_bot(request: CreateBotRequest) -> CreateBotResponse:
     settings = get_settings()
     assistant_ref = request.assistant_ref or settings.assistant_ref
+
+    # One bot per container (plan section 7: shared Xvfb display/PulseAudio
+    # server/websocket-bridge port would otherwise be split between multiple
+    # concurrent Chrome instances -- observed in practice as later bots
+    # never getting a working Chrome session, and the whole container
+    # becoming unpredictable). Reject a second concurrent join instead of
+    # silently colliding; scale by running more containers, not more
+    # concurrent bots in one.
+    active = [s for s in _sessions.values() if s.status().status in _ACTIVE_BOT_STATUSES]
+    if active:
+        busy = active[0].status()
+        raise HTTPException(
+            status_code=409,
+            detail=f"This container already has an active bot session (bot_id={busy.bot_id}, status={busy.status.value}). "
+            "One bot per container -- wait for it to finish or POST /meet-bots/{bot_id}/leave first, or run another container.",
+        )
 
     # The assistant record only matters once the agent worker is dispatched,
     # i.e. only when LiveKit is enabled -- don't require one to exist (or be
