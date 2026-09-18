@@ -30,11 +30,25 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from meet_voice_bot.assistant_store import AssistantNotFoundError, InvalidAssistantConfig, load_assistant
-from meet_voice_bot.config import get_settings
-from meet_voice_bot.joiner import MeetBotSession
-from meet_voice_bot.meet_url import InvalidMeetingUrlError
-from meet_voice_bot.models import BotSession, BotStatus
+# Python's root logger defaults to WARNING with no handler configured, and
+# nothing else in this process ever called logging.basicConfig() -- so
+# every logger.info() call across the whole app (adapter status changes,
+# audio_probe's periodic capture-level lines, "Chrome driver started",
+# "Joined meeting", etc.) was being silently dropped; only warning/error/
+# exception calls and uvicorn's own request-access lines ever reached
+# `docker logs`. This must run before any of this package's other modules
+# are imported (they all do `logger = logging.getLogger(__name__)` at
+# import time), so it's the first thing here, before those imports below.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)-8s %(name)s: %(message)s",
+)
+
+from meet_voice_bot.assistant_store import AssistantNotFoundError, InvalidAssistantConfig, load_assistant  # noqa: E402
+from meet_voice_bot.config import get_settings  # noqa: E402
+from meet_voice_bot.joiner import MeetBotSession  # noqa: E402
+from meet_voice_bot.meet_url import InvalidMeetingUrlError  # noqa: E402
+from meet_voice_bot.models import BotSession, BotStatus  # noqa: E402
 
 # Non-terminal states: a session in one of these still has (or is about to
 # have) a live Chrome/Xvfb process running.
