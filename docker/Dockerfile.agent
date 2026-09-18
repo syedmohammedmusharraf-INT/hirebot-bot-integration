@@ -1,0 +1,34 @@
+# Agent image (plan section 4.1 "agent (Dockerfile.agent)"): the livekit-agents
+# voice worker only. No Chrome/Selenium/Xvfb/PulseAudio -- this process never
+# touches audio hardware, only LiveKit room tracks.
+#
+# Build context must be the hirebot_bot_integration/ repo root, e.g.:
+#   docker build -f docker/Dockerfile.agent -t meet-agent .
+# so this Dockerfile can see meet-agent/, model_support/, assistants/, and
+# requirements-agent.txt (the latter two owned by the control-plane side of
+# this repo, not this file).
+
+FROM python:3.11-slim AS base
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY requirements-agent.txt .
+RUN pip install --no-cache-dir -r requirements-agent.txt
+
+RUN useradd -m -u 1000 agent
+
+COPY meet-agent/*.py ./
+COPY model_support/ ./model_support/
+COPY assistants/ ./assistants/
+
+ENV ASSISTANTS_DIR=/app/assistants \
+    ASSISTANT_REF=meet-voice-bot-v1 \
+    AGENT_NAME=meet-voice-agent
+
+USER agent
+
+CMD ["python", "agent_run.py", "start"]

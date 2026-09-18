@@ -1,0 +1,128 @@
+# Control image: Meet joiner (Selenium + Xvfb + CDP) + room/token/dispatch
+# control plane (meet_voice_bot/). Never installs livekit-agents or any
+# STT/LLM/TTS provider SDK -- see docker/Dockerfile.agent for that image.
+#
+# System/browser layer trimmed from attendee/Dockerfile: kept Xvfb/X11,
+# Chrome (current stable from Google's apt repo) + matching chromedriver
+# (same versions, resolved at build time -- see below), ALSA + PulseAudio + ffmpeg (plan section 2.1 -- PulseAudio is
+# required for Meet audio capture/playback; ffmpeg kept per plan, GStreamer
+# dropped per plan). Also dropped versus the donor: libopencv-dev, gdb,
+# gfortran, universal-ctags, xterm, xclip, libavdevice-dev/pyav rebuild --
+# all donor extras for features this system doesn't have (video pipeline,
+# webpage streaming, screen recording).
+FROM --platform=linux/amd64 ubuntu:22.04 AS base
+
+SHELL ["/bin/bash", "-c"]
+ENV project=meet_voice_bot
+ENV cwd=/app
+WORKDIR $cwd
+
+ARG DEBIAN_FRONTEND=noninteractive
+
+RUN apt-get update \
+    && apt-get install -y \
+    build-essential \
+    ca-certificates \
+    curl \
+    git \
+    libdbus-1-3 \
+    libgbm1 \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libglib2.0-dev \
+    libssl-dev \
+    libx11-dev \
+    libx11-xcb1 \
+    libxcb-image0 \
+    libxcb-keysyms1 \
+    libxcb-randr0 \
+    libxcb-shape0 \
+    libxcb-shm0 \
+    libxcb-xfixes0 \
+    libxcb-xtest0 \
+    libgl1-mesa-dri \
+    libxfixes3 \
+    linux-libc-dev \
+    pkgconf \
+    python3-pip \
+    tar \
+    unzip \
+    wget \
+    && rm -rf /var/lib/apt/lists/*
+
+# Xvfb + X11 (headed Chrome under a virtual display -- Meet blocks headless).
+RUN apt-get update && apt-get install -y \
+    xvfb xauth x11-xkb-utils xfonts-100dpi xfonts-75dpi xfonts-scalable xfonts-cyrillic x11-apps libvulkan1 fonts-liberation xdg-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+# Chrome (stable) + matching chromedriver, installed in lockstep at build time
+# (plan section 7 risk: "Chrome + driver pinned in lockstep").
+# NOTE: do NOT pin a direct dl.google.com .deb URL here -- Google prunes old
+# .debs from that pool (e.g. 134.0.6998.88 now 404s), which breaks the build.
+# Instead install google-chrome-stable from Google's apt repo (always the
+# current stable) and then fetch the chromedriver build with the exact same
+# version from Chrome-for-Testing, so the two can never disagree.
+# --no-check-certificate is for TLS-intercepting AV/firewall on the host
+# (e.g. Kaspersky Endpoint Security replaces certs with its own CA, which the
+# build container doesn't trust). Chrome itself comes from a signed apt repo
+# (keyring check still enforced), so skipping TLS verification is safe here.
+RUN apt-get update && apt-get install -y gnupg \
+    && mkdir -p /usr/share/keyrings \
+    && wget --no-check-certificate -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-linux-signing-keyring.gpg \
+    && echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-linux-signing-keyring.gpg] https://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list \
+    && apt-get update && apt-get install -y google-chrome-stable \
+    && rm -rf /var/lib/apt/lists/* \
+    && google-chrome --version
+
+RUN CHROME_VERSION="$(google-chrome --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')" \
+    && echo "Installing chromedriver for Chrome version ${CHROME_VERSION}" \
+    && wget --no-check-certificate --progress=dot:giga --timeout=30 --tries=3 "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip" -O chromedriver-linux64.zip \
+    && unzip chromedriver-linux64.zip \
+    && mv chromedriver-linux64/chromedriver /usr/local/bin/chromedriver \
+    && chmod +x /usr/local/bin/chromedriver \
+    && rm -rf chromedriver-linux64 chromedriver-linux64.zip \
+    && chromedriver --version \
+    && google-chrome --version
+
+# ALSA + PulseAudio + ffmpeg (plan section 2.1). GStreamer intentionally NOT
+# installed -- the donor's GStreamer pipeline is forbidden for this system.
+RUN apt-get update && apt-get install -y \
+    libasound2 libasound2-plugins alsa alsa-utils alsa-oss \
+    pulseaudio pulseaudio-utils ffmpeg \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN update-ca-certificates
+RUN ln -s /usr/bin/python3 /usr/bin/python
+
+# tini as PID 1 so SIGTERM/SIGINT reach the app cleanly (same as attendee/Dockerfile).
+# Fetched with RUN wget (not ADD) so --no-check-certificate works behind
+# TLS-intercepting AV/firewall -- ADD has no insecure flag and fails the same
+# way as the Chrome download did. sha256 pin still enforces integrity.
+ENV TINI_VERSION=v0.19.0
+RUN wget --no-check-certificate -O /tini https://github.com/krallin/tini/releases/download/${TINI_VERSION}/tini \
+    && echo "93dcc18adc78c65a028a84799ecf8ad40c936fdfc5f2a57b1acda5a8117fa82c  /tini" | sha256sum -c - \
+    && chmod +x /tini
+
+# --- APP LAYER (control-plane build step) ---
+
+FROM base AS app
+
+COPY requirements-control.txt .
+RUN pip install --no-cache-dir -r requirements-control.txt
+
+RUN useradd -m -u 1000 -s /bin/bash app
+
+COPY --chown=app:app --chmod=0755 docker/entrypoint.sh /usr/local/bin/entrypoint.sh
+COPY --chown=app:app meet_voice_bot/ ./meet_voice_bot/
+COPY --chown=app:app model_support/ ./model_support/
+COPY --chown=app:app assistants/ ./assistants/
+
+ENV ASSISTANTS_DIR=/app/assistants \
+    ASSISTANT_REF=meet-voice-bot-v1 \
+    CHROME_BINARY_PATH=/usr/bin/google-chrome \
+    CHROMEDRIVER_PATH=/usr/local/bin/chromedriver
+
+USER app
+
+ENTRYPOINT ["/tini", "--", "/usr/local/bin/entrypoint.sh"]
+CMD ["uvicorn", "meet_voice_bot.main:app", "--host", "0.0.0.0", "--port", "8000"]

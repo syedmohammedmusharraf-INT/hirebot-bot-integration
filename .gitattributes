@@ -1,0 +1,5 @@
+# Force LF regardless of platform/autocrlf -- entrypoint.sh runs inside a
+# Linux container; a Windows checkout with CRLF line endings breaks its
+# shebang and every line in it.
+* text=auto eol=lf
+*.sh text eol=lf

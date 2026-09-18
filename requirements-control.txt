@@ -1,0 +1,23 @@
+# Control image dependencies (meet_voice_bot/ -- Meet joiner + room/token/
+# dispatch control plane). Never installs livekit-agents or any STT/LLM/TTS
+# provider SDK; see requirements-agent.txt for the agent image.
+#
+# Selenium/PyVirtualDisplay pins match attendee/requirements.txt exactly
+# (same Chrome 134 build this system's Dockerfile installs). livekit is
+# pinned the same way for the rtc (publish/subscribe) bindings; livekit-api
+# supplies the server-side room/token/dispatch client used by control.py.
+
+fastapi>=0.115
+uvicorn[standard]>=0.32
+livekit==1.1.8
+livekit-api>=0.8
+pyyaml>=6.0
+selenium==4.27.1
+PyVirtualDisplay==3.0
+websockets>=13.0
+numpy>=1.26.0
+
+# Optional: only needed if meet_voice_bot/web_bot_adapter/x11_input.py is
+# wired in for "humanized" mouse movement (not used by the default join
+# path). Uncomment if you enable it.
+# python-xlib>=0.33

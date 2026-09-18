@@ -1,0 +1,22 @@
+# Minimal setup: just the Meet-joining bot, LiveKit disabled (not removed --
+# see LIVEKIT_ENABLED in meet_voice_bot/config.py and README "Minimal
+# setup"). No livekit-server, no meet-agent. Useful for verifying the Meet
+# join flow and the Meet -> bot audio *capture* path (via audio_probe.py's
+# logging) before wiring the full voice pipeline back in with
+# docker-compose.meet-voice.yaml.
+#
+# docker compose -f docker-compose.minimal.yaml --env-file .env up --build
+
+services:
+  meet-voice:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.meet-voice
+    env_file: .env
+    environment:
+      LIVEKIT_ENABLED: "false"
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./assistants:/app/assistants:ro
+    shm_size: "2gb"

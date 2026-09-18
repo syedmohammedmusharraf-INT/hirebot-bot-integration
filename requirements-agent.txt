@@ -1,0 +1,27 @@
+# meet-agent (voice pipeline worker) dependencies.
+#
+# Version pins below are ">=" floors, not verified exact releases: written
+# without network access to check current PyPI versions for the
+# livekit-agents plugin ecosystem. Treat these as known-good minimums to
+# verify against the actual PyPI index before building the agent image, not
+# as exact pins.
+
+livekit-agents>=0.12.0
+livekit-plugins-deepgram>=0.6.0
+livekit-plugins-openai>=0.10.0
+livekit-plugins-cartesia>=0.4.0
+livekit-plugins-elevenlabs>=0.7.0
+livekit-plugins-silero>=0.7.0
+livekit-plugins-turn-detector>=0.4.0
+livekit-plugins-sarvam>=0.1.0
+livekit-plugins-google>=0.5.0
+numpy>=1.26.0
+scipy>=1.11.0
+onnxruntime>=1.17.0
+pyyaml>=6.0
+
+# No prebuilt Windows wheel and doesn't build under MSVC (GCC-style flags
+# baked into its build config) -- it's a Linux-target dependency anyway,
+# only exercised inside docker/Dockerfile.agent. Installs normally on
+# Linux/macOS.
+webrtc-noise-gain>=1.2.3; sys_platform != "win32"

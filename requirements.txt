@@ -1,0 +1,50 @@
+# Combined local-dev environment for this repo (control plane + agent worker
+# + tests) in a single virtualenv, installed with `uv` (see README "Running
+# without Docker"). The Docker images stay split per the plan's two-image
+# layout -- docker/Dockerfile.meet-voice installs requirements-control.txt
+# only, docker/Dockerfile.agent installs requirements-agent.txt only. This
+# file is the union of both, for local iteration across the whole repo.
+#
+# Agent-side plugin version floors are unverified against the live PyPI
+# index (no network access when written) -- treat them as known-good
+# minimums, not exact pins; `uv pip install` will surface any that don't
+# resolve.
+
+# --- control plane (meet_voice_bot/) ---
+fastapi>=0.115
+uvicorn[standard]>=0.32
+livekit==1.1.8
+livekit-api>=0.8
+selenium==4.27.1
+PyVirtualDisplay==3.0
+websockets>=13.0
+
+# --- agent worker (meet-agent/) ---
+livekit-agents>=0.12.0
+livekit-plugins-deepgram>=0.6.0
+livekit-plugins-openai>=0.10.0
+livekit-plugins-cartesia>=0.4.0
+livekit-plugins-elevenlabs>=0.7.0
+livekit-plugins-silero>=0.7.0
+livekit-plugins-turn-detector>=0.4.0
+livekit-plugins-sarvam>=0.1.0
+livekit-plugins-google>=0.5.0
+scipy>=1.11.0
+onnxruntime>=1.17.0
+# webrtc-noise-gain ships no prebuilt Windows wheel and its sdist doesn't
+# build under MSVC (GCC-style flags baked into its build config) -- it's a
+# Linux-target dependency anyway (meet-agent/audio_denoise.py's noise
+# suppression only matters under docker/Dockerfile.agent). Installed
+# automatically on Linux/macOS dev boxes; skipped on Windows.
+webrtc-noise-gain>=1.2.3; sys_platform != "win32"
+
+# --- shared (model_support/ + both packages above) ---
+numpy>=1.26.0
+pyyaml>=6.0
+
+# --- dev / test tooling ---
+pytest>=8.0
+
+# Optional: only needed if meet_voice_bot/web_bot_adapter/x11_input.py is
+# wired in for "humanized" mouse movement (unused by the default join path).
+# python-xlib>=0.33

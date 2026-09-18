@@ -1,0 +1,59 @@
+# Self-hosted stack: LiveKit server + control (Meet joiner + room/token API) + agent worker.
+# `docker compose -f docker-compose.meet-voice.yaml --env-file .env up --build`
+# See README.md "Run it" for the full walkthrough.
+
+services:
+  livekit:
+    image: livekit/livekit-server:v1.8
+    command: --dev --bind 0.0.0.0
+    environment:
+      LIVEKIT_KEYS: "${LIVEKIT_API_KEY}: ${LIVEKIT_API_SECRET}"
+    ports:
+      - "7880:7880" # HTTP/WebSocket signaling
+      - "7881:7881" # TCP fallback
+      - "50000-50100:50000-50100/udp" # WebRTC media
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:7880"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  meet-voice:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.meet-voice
+    env_file: .env
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+    depends_on:
+      livekit:
+        condition: service_healthy
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./assistants:/app/assistants:ro
+    # One bot per container in production (plan section 7: shared-Pulse
+    # bleed between concurrent bots on one Pulse server). This compose file
+    # runs a single meet-voice replica suitable for local dev / one meeting
+    # at a time; scale via `docker compose up --scale meet-voice=N` only if
+    # each replica gets its own PulseAudio (the default -- each container has
+    # its own PulseAudio daemon started by entrypoint.sh).
+    shm_size: "2gb"
+
+  meet-agent:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.agent
+    env_file: .env
+    environment:
+      LIVEKIT_URL: ws://livekit:7880
+    depends_on:
+      livekit:
+        condition: service_healthy
+    volumes:
+      - ./assistants:/app/assistants:ro
+    # Scale agent workers independently of bots -- LiveKit dispatches jobs to
+    # whichever registered worker has capacity (plan section 4.1 two-server
+    # layout: control plane + capacity node(s)).
+    deploy:
+      replicas: 1
